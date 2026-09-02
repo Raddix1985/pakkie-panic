@@ -4,54 +4,165 @@ using UnityEngine;
 public class LevelManager : MonoBehaviour
 {
     [Header("World Generation")]
-    public GameObject roadPrefab; // The template we just made
-    public Transform player; // To track how far we've driven
-    public float chunkLength = 50f; // Must match the Z-scale of our RoadChunk
-    public int chunksOnScreen = 5; // How many road pieces exist at once
+    [SerializeField] private GameObject roadPrefab;
+    [SerializeField] private Transform player;
+    [SerializeField, Min(1)] private int chunksAhead = 4;
+    [SerializeField, Min(0)] private int chunksBehind = 1;
+    [SerializeField] private bool travelAlongX = true;
+    [SerializeField] private float roadCenterOffset = 0f;
 
-    private float spawnZ = 0f;
-    private Queue<GameObject> activeChunks = new Queue<GameObject>();
+    private readonly Queue<GameObject> activeChunks = new Queue<GameObject>();
 
-    void Start()
+    private float chunkLength;
+    private float nextChunkStart;
+    private float prefabLocalMinTravel;
+    private float prefabLocalCenterLane;
+    private Vector3 travelDirection;
+    private Vector3 laneDirection;
+
+    private void Start()
     {
-        // When the game boots, spawn the first 5 chunks to build the starting runway
-        for (int i = 0; i < chunksOnScreen; i++)
+        if (roadPrefab == null || player == null ||
+            !TryGetRoadBounds(roadPrefab, out Bounds roadBounds))
+        {
+            Debug.LogError(
+                "LevelManager requires a road prefab with an enabled collider and a player transform.",
+                this);
+            enabled = false;
+            return;
+        }
+
+        travelDirection = travelAlongX ? Vector3.right : Vector3.forward;
+        laneDirection = travelAlongX ? Vector3.forward : Vector3.right;
+
+        chunkLength = travelAlongX ? roadBounds.size.x : roadBounds.size.z;
+
+        if (chunkLength <= Mathf.Epsilon)
+        {
+            Debug.LogError("Road prefab has no usable length.", this);
+            enabled = false;
+            return;
+        }
+
+        prefabLocalMinTravel = travelAlongX ? roadBounds.min.x : roadBounds.min.z;
+        prefabLocalCenterLane = travelAlongX ? roadBounds.center.z : roadBounds.center.x;
+
+        float playerTravel = Vector3.Dot(player.position, travelDirection);
+
+        // The first generated chunk begins behind the player.
+        nextChunkStart =
+            Mathf.Floor(playerTravel / chunkLength) * chunkLength -
+            chunksBehind * chunkLength;
+
+        int initialChunkCount = chunksBehind + chunksAhead + 1;
+
+        for (int i = 0; i < initialChunkCount; i++)
         {
             SpawnChunk();
         }
     }
 
-    void Update()
+    private void Update()
     {
-        // THE BULLETPROOF TREADMILL
-        // We no longer guess based on past chunks. 
-        // We demand that the end of the road (spawnZ) is ALWAYS at least 
-        // 200 units ahead of the player. 
-        // A 'while' loop guarantees it builds road instantly, even if the game lags.
+        if (player == null)
+        {
+            return;
+        }
 
-        while (player.position.z + 200f > spawnZ)
+        float playerTravel = Vector3.Dot(player.position, travelDirection);
+        float targetEnd = playerTravel + chunksAhead * chunkLength;
+
+        // Keep adding road whenever the player approaches the generated end.
+        while (nextChunkStart < targetEnd)
         {
             SpawnChunk();
-            DeleteOldestChunk();
+        }
+
+        // Remove only chunks safely behind the player.
+        while (activeChunks.Count > chunksBehind + chunksAhead + 1)
+        {
+            Destroy(activeChunks.Dequeue());
         }
     }
 
-    void SpawnChunk()
+    private void SpawnChunk()
     {
-        // Create a new road chunk exactly at the spawnZ marker
-        GameObject chunk = Instantiate(roadPrefab, new Vector3(0, 0, spawnZ), Quaternion.identity);
+        GameObject chunk = Instantiate(roadPrefab);
 
-        // Add it to our memory queue
+        float travelPosition = nextChunkStart - prefabLocalMinTravel;
+
+        //float playerLane = Vector3.Dot(player.position, laneDirection);
+        float lanePosition = roadCenterOffset;
+            //playerLane - prefabLocalCenterLane + roadCenterOffset;
+
+        Vector3 position = Vector3.zero;
+
+        if (travelAlongX)
+        {
+            position.x = travelPosition;
+            position.z = lanePosition;
+        }
+        else
+        {
+            position.z = travelPosition;
+            position.x = lanePosition;
+        }
+
+        chunk.transform.position = position;
+        chunk.transform.rotation = Quaternion.identity;
+
         activeChunks.Enqueue(chunk);
-
-        // Move the spawn marker forward 50 units for the next piece
-        spawnZ += chunkLength;
+        nextChunkStart += chunkLength;
     }
 
-    void DeleteOldestChunk()
+    private static bool TryGetRoadBounds(GameObject road, out Bounds bounds)
     {
-        // Remove the oldest chunk from memory so the phone doesn't explode
-        GameObject oldChunk = activeChunks.Dequeue();
-        Destroy(oldChunk);
+        Collider[] colliders = road.GetComponentsInChildren<Collider>();
+
+        if (colliders.Length == 0)
+        {
+            bounds = default;
+            return false;
+        }
+
+        // Get bounds in prefab local space so pivot placement does not
+        // cause cumulative gaps/overlaps between chunks.
+        Transform root = road.transform;
+
+        bool initialized = false;
+        bounds = default;
+
+        foreach (Collider collider in colliders)
+        {
+            Bounds worldBounds = collider.bounds;
+            Vector3[] corners =
+            {
+                new Vector3(worldBounds.min.x, worldBounds.min.y, worldBounds.min.z),
+                new Vector3(worldBounds.min.x, worldBounds.min.y, worldBounds.max.z),
+                new Vector3(worldBounds.min.x, worldBounds.max.y, worldBounds.min.z),
+                new Vector3(worldBounds.min.x, worldBounds.max.y, worldBounds.max.z),
+                new Vector3(worldBounds.max.x, worldBounds.min.y, worldBounds.min.z),
+                new Vector3(worldBounds.max.x, worldBounds.min.y, worldBounds.max.z),
+                new Vector3(worldBounds.max.x, worldBounds.max.y, worldBounds.min.z),
+                new Vector3(worldBounds.max.x, worldBounds.max.y, worldBounds.max.z)
+            };
+
+            foreach (Vector3 corner in corners)
+            {
+                Vector3 local = root.InverseTransformPoint(corner);
+
+                if (!initialized)
+                {
+                    bounds = new Bounds(local, Vector3.zero);
+                    initialized = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(local);
+                }
+            }
+        }
+
+        return initialized;
     }
 }

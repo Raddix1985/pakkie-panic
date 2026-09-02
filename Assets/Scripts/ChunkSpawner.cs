@@ -3,41 +3,107 @@ using UnityEngine;
 public class ChunkSpawner : MonoBehaviour
 {
     [Header("Hazard Generation")]
-    public GameObject potholePrefab;
-    public GameObject taxiPrefab; // The new dynamic hazard
+    [SerializeField] private GameObject potholePrefab;
+    [SerializeField] private GameObject taxiPrefab;
+    [SerializeField, Range(0f, 1f)] private float spawnChance = 0.8f;
+    [SerializeField, Min(1)] private int laneCount = 3;
+    [SerializeField, Min(0)] private int maxHazardsPerChunk = 1;
+    [SerializeField, Min(0f)] private float edgePadding = 1f;
+    [SerializeField] private bool travelAlongX = true;
+    [SerializeField] private float potholeSurfaceOffset = 0.03f;
+    [SerializeField] private float taxiSurfaceOffset = 0.6f;
+    [SerializeField] private float minimumHazardSeparation = 6f;
 
-    [Tooltip("Chance to spawn a hazard (0 = never, 1 = always)")]
-    [Range(0f, 1f)]
-    public float spawnChance = 0.7f;
-
-    //Lane coordinates for the 3-lane road (centered perfectly on 0)
-    private float[] lanes = { -3.5f, 0f, 3.5f };
-
-    void Start()
+    private void Start()
     {
-        // When this road chunk is born, roll the dice to see if we spawn a hazard
-        if (Random.value <= spawnChance)
+        if (maxHazardsPerChunk <= 0 || !TryGetRoadBounds(out Bounds roadBounds))
         {
-            SpawnHazard();
+            return;
+        }
+
+        int hazardCount = Random.value <= spawnChance ? 1 : 0;
+        if (hazardCount == 0)
+        {
+            return;
+        }
+
+        float minTravel = (travelAlongX ? roadBounds.min.x : roadBounds.min.z) + edgePadding;
+        float maxTravel = (travelAlongX ? roadBounds.max.x : roadBounds.max.z) - edgePadding;
+        float minLane = (travelAlongX ? roadBounds.min.z : roadBounds.min.x) + edgePadding;
+        float maxLane = (travelAlongX ? roadBounds.max.z : roadBounds.max.x) - edgePadding;
+
+        if (minTravel >= maxTravel || minLane >= maxLane)
+        {
+            return;
+        }
+
+        float laneWidth = (maxLane - minLane) / laneCount;
+        if (laneWidth <= 0f)
+        {
+            return;
+        }
+
+        // One hazard per chunk keeps the lane readable and prevents impossible walls.
+        for (int i = 0; i < hazardCount; i++)
+        {
+            GameObject hazardPrefab = ChooseHazardPrefab();
+            if (hazardPrefab == null)
+            {
+                continue;
+            }
+
+            int lane = Random.Range(0, laneCount);
+
+            float travelPadding = Mathf.Min(
+                edgePadding + minimumHazardSeparation * 0.5f,
+                Mathf.Max(0.05f, (maxTravel - minTravel) * 0.45f));
+
+            float travelPosition = Random.Range(
+                minTravel + travelPadding,
+                maxTravel - travelPadding);
+
+            float lanePosition = minLane + laneWidth * (lane + 0.5f);
+
+            float x = travelAlongX ? travelPosition : lanePosition;
+            float z = travelAlongX ? lanePosition : travelPosition;
+            float y = roadBounds.max.y +
+                      (hazardPrefab == potholePrefab ? potholeSurfaceOffset : taxiSurfaceOffset);
+
+            GameObject hazard = Instantiate(
+                hazardPrefab,
+                new Vector3(x, y, z),
+                Quaternion.identity);
+
+            // Ensure spawned hazards can actually be detected by ScooterController.
+            if (!hazard.CompareTag("Hazard"))
+            {
+                hazard.tag = "Hazard";
+            }
         }
     }
 
-    void SpawnHazard()
+    private GameObject ChooseHazardPrefab()
     {
-        // 1. Pick a random lane (0, 1, 2, or 3)
-        int randomLane = Random.Range(0, 3);
-        float randomZ = Random.Range(-20f, 20f);
+        if (potholePrefab == null) return taxiPrefab;
+        if (taxiPrefab == null) return potholePrefab;
+        return Random.value < 0.7f ? potholePrefab : taxiPrefab;
+    }
 
-        // 2. Roll the dice: 70% chance it's a Pothole, 30% chance it's a Taxi
-        GameObject hazardToSpawn = (Random.value > 0.3f) ? potholePrefab : taxiPrefab;
+    private bool TryGetRoadBounds(out Bounds bounds)
+    {
+        Collider[] colliders = GetComponentsInChildren<Collider>();
+        if (colliders.Length == 0)
+        {
+            bounds = default;
+            return false;
+        }
 
-        // 3. Calculate the correct Y-height so the Taxi isn't buried and the Pothole doesn't float
-        float spawnHeight = (hazardToSpawn == potholePrefab) ? 0.52f : 1.5f;
+        bounds = colliders[0].bounds;
+        for (int i = 1; i < colliders.Length; i++)
+        {
+            bounds.Encapsulate(colliders[i].bounds);
+        }
 
-        // 4. Calculate the exact 3D position in the world
-        Vector3 finalSpawnPosition = new Vector3(lanes[randomLane], spawnHeight, transform.position.z + randomZ);
-
-        // 5. Drop it onto the highway
-        Instantiate(hazardToSpawn, finalSpawnPosition, Quaternion.identity);
+        return true;
     }
 }

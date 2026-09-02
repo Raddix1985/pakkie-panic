@@ -1,145 +1,257 @@
-using UnityEngine;
 using System.Collections;
+using UnityEngine;
+using UnityEngine.Events;
 
 public class ScooterController : MonoBehaviour
 {
-    [Header("Engine Specs")]
-    public float acceleration = 15f; // Auto-gas speed
-    public float turnSpeed = 150f;
-    public float brakeMultiplier = 0.5f; // Reverses at half speed when holding both sides
+    [Header("Forward Movement")]
+    [SerializeField] private float forwardSpeed = 10f;
+    [SerializeField] private float acceleration = 18f;
+    [SerializeField] private float maxForwardSpeed = 14f;
+    [SerializeField] private float brakeMultiplier = 0.45f;
 
-    [Header("Components")]
-    public PackageBalance packageScript;
-    public UIManager uiManager;
+    [Header("Three Lane Movement")]
+    [SerializeField, Min(1)] private int laneCount = 3;
+    [SerializeField] private float laneWidth = 3.5f;
+    [SerializeField] private float laneCenterOffset = 0f;
+    [SerializeField] private float laneChangeSpeed = 18f;
+    [SerializeField] private float laneChangeResponse = 22f;
+    [SerializeField] private bool travelAlongX = true;
 
-    private bool isDashing = false;
-    private float normalSpeed;
+    [Header("Dash")]
+    [SerializeField] private float dashMultiplier = 2f;
+    [SerializeField] private float dashDuration = 3f;
 
-    void Start()
+    [Header("Gameplay Events")]
+    [SerializeField] private UnityEvent onHazardHit;
+    [SerializeField] private UnityEvent onDropZoneReached;
+    [SerializeField] private UnityEvent onDashRequested;
+    [SerializeField] private UnityEvent onDashStarted;
+    [SerializeField] private UnityEvent onDashEnded;
+
+    private bool isDashing;
+    private bool canMove = true;
+    private float currentSpeed;
+    private int currentLane;
+    private float targetLanePosition;
+    private float touchStartX;
+    private bool touchWasActive;
+
+    private void Start()
     {
-        normalSpeed = acceleration;
+        currentSpeed = forwardSpeed;
+        currentLane = laneCount / 2;
+        targetLanePosition = GetLanePosition(currentLane);
+
+        SnapToLaneImmediately();
     }
 
-    void Update()
+    private void Update()
     {
-        // THE DASH TRIGGER (Still works on Spacebar for PC)
+        if (!canMove)
+        {
+            return;
+        }
+
+        ReadLaneInput();
+        UpdateForwardMovement();
+        UpdateLaneMovement();
+    }
+
+    private void ReadLaneInput()
+    {
+        // Keyboard: one press = one lane change.
+        if (Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow))
+        {
+            ChangeLane(-1);
+        }
+
+        if (Input.GetKeyDown(KeyCode.D) || Input.GetKeyDown(KeyCode.RightArrow))
+        {
+            ChangeLane(1);
+        }
+
+        // Touch/mouse: horizontal swipe = lane change.
+        bool touchActive = Input.touchCount > 0;
+
+        if (touchActive)
+        {
+            Touch touch = Input.GetTouch(0);
+
+            if (!touchWasActive && touch.phase == TouchPhase.Began)
+            {
+                touchStartX = touch.position.x;
+            }
+
+            if (touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled)
+            {
+                float delta = touch.position.x - touchStartX;
+                if (Mathf.Abs(delta) >= Screen.width * 0.12f)
+                {
+                    ChangeLane(delta > 0f ? 1 : -1);
+                }
+            }
+
+            touchWasActive = true;
+            return;
+        }
+
+        touchWasActive = false;
+
+        // Mouse drag is useful for editor testing.
+        if (Input.GetMouseButtonDown(0))
+        {
+            touchStartX = Input.mousePosition.x;
+        }
+
+        if (Input.GetMouseButtonUp(0))
+        {
+            float delta = Input.mousePosition.x - touchStartX;
+            if (Mathf.Abs(delta) >= Screen.width * 0.12f)
+            {
+                ChangeLane(delta > 0f ? 1 : -1);
+            }
+        }
+
         if (Input.GetKeyDown(KeyCode.Space) && !isDashing)
         {
-            if (uiManager != null && uiManager.IsGeesFull())
-            {
-                StartCoroutine(DashRoutine());
-            }
-        }
-
-        // 1. READ INPUT (Hybrid PC & Mobile)
-        bool pressingLeft = Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow);
-        bool pressingRight = Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow);
-
-        // Read Mouse Clicks (for Editor testing)
-        if (Input.GetMouseButton(0))
-        {
-            if (Input.mousePosition.x < Screen.width / 2f) pressingLeft = true;
-            if (Input.mousePosition.x > Screen.width / 2f) pressingRight = true;
-        }
-
-        // Read Actual Mobile Touches (Allows multi-touch braking)
-        if (Input.touchCount > 0)
-        {
-            pressingLeft = false; pressingRight = false; // Reset to purely read fingers
-            foreach (Touch touch in Input.touches)
-            {
-                if (touch.position.x < Screen.width / 2f) pressingLeft = true;
-                if (touch.position.x > Screen.width / 2f) pressingRight = true;
-            }
-        }
-
-        // 2. THE ENGINE LOGIC
-        float currentSpeed = acceleration;
-        float turnAmount = 0f;
-
-        if (pressingLeft && pressingRight)
-        {
-            // SLAM THE BRAKES (Hold both thumbs / A+D)
-            currentSpeed = -acceleration * brakeMultiplier;
-        }
-        else if (pressingLeft)
-        {
-            turnAmount = -1f;
-        }
-        else if (pressingRight)
-        {
-            turnAmount = 1f;
-        }
-
-        // 3. APPLY MOVEMENT (Auto-Gas)
-        transform.Translate(Vector3.forward * currentSpeed * Time.deltaTime);
-
-        // 4. APPLY STEERING
-        if (currentSpeed != 0)
-        {
-            // If reversing, flip the steering direction so it feels natural
-            float directionModifier = currentSpeed > 0 ? 1f : -1f;
-            transform.Rotate(Vector3.up * turnAmount * turnSpeed * directionModifier * Time.deltaTime);
+            onDashRequested?.Invoke();
         }
     }
 
-    void OnTriggerEnter(Collider other)
+    private void UpdateForwardMovement()
+    {
+        float targetSpeed = forwardSpeed;
+
+        if (Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow))
+        {
+            targetSpeed *= brakeMultiplier;
+        }
+
+        if (isDashing)
+        {
+            targetSpeed *= dashMultiplier;
+        }
+
+        currentSpeed = Mathf.MoveTowards(
+            currentSpeed,
+            targetSpeed,
+            acceleration * Time.deltaTime);
+
+        Vector3 movement = travelAlongX ? Vector3.right : Vector3.forward;
+        transform.position += movement * currentSpeed * Time.deltaTime;
+    }
+
+    private void UpdateLaneMovement()
+    {
+        Vector3 position = transform.position;
+
+        float axis = travelAlongX ? position.z : position.x;
+        float newAxis = Mathf.SmoothDamp(
+            axis,
+            targetLanePosition,
+            ref laneVelocity,
+            1f / Mathf.Max(laneChangeResponse, 0.01f),
+            laneChangeSpeed,
+            Time.deltaTime);
+
+        if (travelAlongX)
+            position.z = newAxis;
+        else
+            position.x = newAxis;
+
+        transform.position = position;
+    }
+
+    private float laneVelocity;
+
+    public void ChangeLane(int direction)
+    {
+        int newLane = Mathf.Clamp(
+            currentLane + direction,
+            0,
+            laneCount - 1);
+
+        if (newLane == currentLane)
+        {
+            return;
+        }
+
+        currentLane = newLane;
+        targetLanePosition = GetLanePosition(currentLane);
+    }
+
+    public void SetLane(int lane)
+    {
+        currentLane = Mathf.Clamp(lane, 0, laneCount - 1);
+        targetLanePosition = GetLanePosition(currentLane);
+    }
+
+    private float GetLanePosition(int lane)
+    {
+        return laneCenterOffset +
+               (lane - (laneCount - 1) * 0.5f) * laneWidth;
+    }
+
+    private void SnapToLaneImmediately()
+    {
+        Vector3 position = transform.position;
+
+        if (travelAlongX)
+            position.z = targetLanePosition;
+        else
+            position.x = targetLanePosition;
+
+        transform.position = position;
+    }
+
+    public void StartDash()
+    {
+        if (canMove && !isDashing)
+        {
+            StartCoroutine(DashRoutine());
+        }
+    }
+
+    public void Stop()
+    {
+        canMove = false;
+        StopAllCoroutines();
+        isDashing = false;
+        currentSpeed = 0f;
+    }
+
+    private void OnTriggerEnter(Collider other)
     {
         if (other.CompareTag("Hazard"))
         {
             if (isDashing)
             {
-                Debug.Log("GEES SMASH! Obliterated a " + other.gameObject.name);
                 Destroy(other.gameObject);
                 return;
             }
 
-            Debug.LogError("YOH! Hit a hazard! Run is over!");
-            acceleration = 0; // Kill the auto-gas
-            if (packageScript != null) packageScript.DropPackage();
-            if (uiManager != null) uiManager.GameOver();
+            Stop();
+            onHazardHit?.Invoke();
+            return;
         }
-        void OnTriggerEnter(Collider other)
+
+        if (other.CompareTag("DropZone"))
         {
-            // 1. THE FAIL STATE (Hitting a Taxi/Pothole)
-            if (other.CompareTag("Hazard"))
-            {
-                if (isDashing)
-                {
-                    Debug.Log("GEES SMASH! Obliterated a " + other.gameObject.name);
-                    Destroy(other.gameObject);
-                    return;
-                }
-
-                Debug.LogError("YOH! Hit a hazard! Run is over!");
-                acceleration = 0;
-                if (packageScript != null) packageScript.DropPackage();
-                if (uiManager != null) uiManager.GameOver();
-            }
-
-            // 2. THE WIN STATE (Reaching the Destination)
-            if (other.CompareTag("DropZone"))
-            {
-                Debug.Log("LAKKA! Delivery Successful! The Koesisters are hot and fresh!");
-
-                // Hit the brakes
-                acceleration = 0;
-
-                // Destroy the zone so we don't trigger it twice
-                Destroy(other.gameObject);
-
-                // (Optional) If your UIManager has a Win Game screen, we will call it here later!
-            }
+            Stop();
+            onDropZoneReached?.Invoke();
+            Destroy(other.gameObject);
         }
     }
 
-    IEnumerator DashRoutine()
+    private IEnumerator DashRoutine()
     {
         isDashing = true;
-        acceleration = normalSpeed * 2f;
-        uiManager.SpendGees();
-        yield return new WaitForSeconds(3f);
-        acceleration = normalSpeed;
+        onDashStarted?.Invoke();
+
+        yield return new WaitForSeconds(dashDuration);
+
         isDashing = false;
+        onDashEnded?.Invoke();
     }
 }

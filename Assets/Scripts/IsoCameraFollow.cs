@@ -2,26 +2,51 @@ using UnityEngine;
 
 public class IsoCameraFollow : MonoBehaviour
 {
-    public Transform player;
-    public Vector3 offset = new Vector3(-10f, 15f, -10f);
-    public float smoothSpeed = 5f;
+    [SerializeField] private Transform player;
+    [SerializeField] private float followDistance = 14f;
+    [SerializeField] private float height = 11f;
+    [SerializeField] private float sideOffset = 8f;
+    [SerializeField] private float lookAheadDistance = 18f;
+    [SerializeField] private float positionSmoothTime = 0.18f;
+    [SerializeField] private float rotationSpeed = 8f;
 
-    void Start()
+    private Vector3 velocity;
+
+    private void Start()
     {
-        // Snap to the player immediately on start
         if (player != null)
         {
-            transform.position = player.position + offset;
-            transform.rotation = Quaternion.Euler(30f, 45f, 0f); // Lock the classic 3/4 angle
+            SnapToPlayer();
         }
     }
 
-    void LateUpdate()
+    private void LateUpdate()
     {
-        if (player == null) return;
+        if (player == null)
+        {
+            return;
+        }
 
-        // Smoothly glide to follow the player's position, but NEVER change rotation
-        Vector3 targetPosition = player.position + offset;
-        transform.position = Vector3.Lerp(transform.position, targetPosition, smoothSpeed * Time.deltaTime);
+        Vector3 forward = Vector3.ProjectOnPlane(player.forward, Vector3.up).normalized;
+        if (forward.sqrMagnitude < Mathf.Epsilon)
+        {
+            forward = Vector3.right;
+        }
+
+        Vector3 right = Vector3.Cross(Vector3.up, forward);
+        Vector3 desiredPosition = player.position - forward * followDistance + right * sideOffset + Vector3.up * height;
+        transform.position = Vector3.SmoothDamp(transform.position, desiredPosition, ref velocity, positionSmoothTime);
+
+        Vector3 target = player.position + forward * lookAheadDistance + Vector3.up * 1.5f;
+        Quaternion desiredRotation = Quaternion.LookRotation(target - transform.position, Vector3.up);
+        transform.rotation = Quaternion.Slerp(transform.rotation, desiredRotation, rotationSpeed * Time.deltaTime);
+    }
+
+    private void SnapToPlayer()
+    {
+        Vector3 forward = Vector3.ProjectOnPlane(player.forward, Vector3.up).normalized;
+        Vector3 right = Vector3.Cross(Vector3.up, forward);
+        transform.position = player.position - forward * followDistance + right * sideOffset + Vector3.up * height;
+        transform.LookAt(player.position + forward * lookAheadDistance + Vector3.up * 1.5f);
     }
 }

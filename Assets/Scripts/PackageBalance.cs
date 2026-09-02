@@ -1,56 +1,111 @@
 using UnityEngine;
+using UnityEngine.Events;
 
 public class PackageBalance : MonoBehaviour
 {
-    [Header("True Centrifugal Physics")]
-    [Tooltip("How strongly the turn translates into a leaning angle. Higher = leans more.")]
-    public float tiltMultiplier = 0.4f;
+    [Header("Balance")]
+    [SerializeField] private float tiltMultiplier = 0.22f;
+    [SerializeField] private float suspensionStiffness = 9f;
+    [SerializeField] private float maxTiltAngle = 38f;
+    [SerializeField] private float dropDelay = 0.12f;
 
-    [Tooltip("How fast the box reacts to the turn and snaps back when driving straight.")]
-    public float suspensionStiffness = 5f;
+    [Header("Impact")]
+    [SerializeField] private float knockOffImpact = 4.5f;
+    [SerializeField] private float upwardImpulse = 1.5f;
+    [SerializeField] private float torqueImpulse = 3f;
 
-    [Tooltip("The exact angle where the run ends.")]
-    public float maxTiltAngle = 45f;
+    [Header("Events")]
+    [SerializeField] private UnityEvent onPackageDropped;
 
+    private Transform scooter;
     private Vector3 lastForward;
-    private float currentTilt = 0f;
-    private bool hasDropped = false;
+    private float currentTilt;
+    private bool hasDropped;
+    private float overTiltTime;
 
-    void Start()
+    private void Awake()
     {
-        if (transform.parent != null)
+        scooter = transform.parent;
+    }
+
+    private void Start()
+    {
+        if (scooter != null)
         {
-            lastForward = transform.parent.forward;
+            lastForward = scooter.forward;
         }
     }
 
-    void Update()
+    private void LateUpdate()
     {
-        if (hasDropped || transform.parent == null) return;
+        if (hasDropped || scooter == null)
+        {
+            return;
+        }
 
-        // 1. MEASURE DEGREES PER SECOND (The exact speed of your turn)
-        Vector3 currentForward = transform.parent.forward;
-        float turnAngle = Vector3.SignedAngle(lastForward, currentForward, Vector3.up);
+        Vector3 currentForward = scooter.forward;
+        float turnRate = Vector3.SignedAngle(
+            lastForward,
+            currentForward,
+            Vector3.up) / Mathf.Max(Time.deltaTime, 0.0001f);
+
         lastForward = currentForward;
 
-        // Prevent math errors if Time.deltaTime is incredibly small
-        if (Time.deltaTime == 0) return;
+        float targetTilt = Mathf.Clamp(
+            -turnRate * tiltMultiplier,
+            -maxTiltAngle,
+            maxTiltAngle);
 
-        float turnRate = turnAngle / Time.deltaTime;
+        // SmoothDamp is more fluid than frame-dependent Lerp for this use.
+        currentTilt = Mathf.Lerp(
+            currentTilt,
+            targetTilt,
+            1f - Mathf.Exp(-suspensionStiffness * Time.deltaTime));
 
-        // 2. CALCULATE TRUE CENTRIFUGAL LEAN
-        // If you turn right (+), centrifugal force pushes the target lean left (-)
-        float targetTilt = -turnRate * tiltMultiplier;
+        transform.localRotation = Quaternion.Euler(
+            0f,
+            0f,
+            currentTilt);
 
-        // 3. APPLY SUSPENSION (Smooth Lerp)
-        // The box fights to reach the target lean, and fights to return to 0 when driving straight
-        currentTilt = Mathf.Lerp(currentTilt, targetTilt, Time.deltaTime * suspensionStiffness);
+        if (Mathf.Abs(currentTilt) >= maxTiltAngle * 0.92f)
+        {
+            overTiltTime += Time.deltaTime;
 
-        // 4. VISUAL UPDATE
-        transform.localRotation = Quaternion.Euler(0, 0, currentTilt);
+            if (overTiltTime >= dropDelay)
+            {
+                DropPackage();
+            }
+        }
+        else
+        {
+            overTiltTime = 0f;
+        }
+    }
 
-        // 5. THE KILL SCREEN
-        if (Mathf.Abs(currentTilt) >= maxTiltAngle)
+    private void OnCollisionEnter(Collision collision)
+    {
+        if (hasDropped)
+        {
+            return;
+        }
+
+        // A meaningful side/front impact can knock the package off.
+        float impact = collision.relativeVelocity.magnitude;
+
+        if (impact >= knockOffImpact)
+        {
+            DropPackage(collision.relativeVelocity);
+        }
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (hasDropped)
+        {
+            return;
+        }
+
+        if (other.CompareTag("Hazard"))
         {
             DropPackage();
         }
@@ -58,15 +113,42 @@ public class PackageBalance : MonoBehaviour
 
     public void DropPackage()
     {
-        if (hasDropped) return;
+        DropPackage(Vector3.zero);
+    }
+
+    private void DropPackage(Vector3 impactVelocity)
+    {
+        if (hasDropped)
+        {
+            return;
+        }
 
         hasDropped = true;
-        Debug.LogWarning("YOH! Package Dropped! The Gees is gone!");
 
-        transform.parent = null;
+        transform.SetParent(null, true);
 
-        Rigidbody rb = gameObject.AddComponent<Rigidbody>();
-        rb.AddForce(Vector3.up * 5f, ForceMode.Impulse);
-        rb.AddTorque(new Vector3(10f, 10f, 10f));
+        Rigidbody body = GetComponent<Rigidbody>();
+        if (body == null)
+        {
+            body = gameObject.AddComponent<Rigidbody>();
+        }
+
+        body.isKinematic = false;
+        body.useGravity = true;
+
+        Vector3 impulse = impactVelocity.sqrMagnitude > 0.01f
+            ? impactVelocity.normalized * knockOffImpact
+            : scooter != null
+                ? scooter.forward * 1.5f
+                : Vector3.forward;
+
+        impulse += Vector3.up * upwardImpulse;
+
+        body.AddForce(impulse, ForceMode.Impulse);
+        body.AddTorque(
+            Random.insideUnitSphere * torqueImpulse,
+            ForceMode.Impulse);
+
+        onPackageDropped?.Invoke();
     }
 }

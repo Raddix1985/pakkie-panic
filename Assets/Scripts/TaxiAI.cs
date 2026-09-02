@@ -2,60 +2,66 @@ using UnityEngine;
 
 public class TaxiAI : MonoBehaviour
 {
-    [Header("Engine Specs")]
-    public float forwardSpeed = 10f; // Slower than the player's 20f so you catch up to it
-    public float sideSnappiness = 8f; // Taxis swerve hard
-    public float laneChangeInterval = 2f; // How often it thinks about swerving
+    [Header("Movement")]
+    [SerializeField] private float forwardSpeed = 8f;
+    [SerializeField] private bool travelAlongX = true;
 
-    // The 4-lane coordinates
-    private float[] lanes = { -6f, -2f, 2f, 6f };
+    [Header("Lanes")]
+    [SerializeField, Min(1)] private int laneCount = 3;
+    [SerializeField] private float laneWidth = 3.5f;
+    [SerializeField] private float laneCenterOffset = 0f;
+    [SerializeField] private float laneSnapSpeed = 14f;
+    [SerializeField] private bool randomStartingLane = true;
+
     private int currentLane;
-    private float timer;
+    private float targetLanePosition;
 
-    void Start()
+    private void Start()
     {
-        // 1. Figure out which lane it spawned in so it doesn't instantly teleport
-        float closestDist = float.MaxValue;
-        for (int i = 0; i < lanes.Length; i++)
-        {
-            float dist = Mathf.Abs(transform.position.x - lanes[i]);
-            if (dist < closestDist)
-            {
-                closestDist = dist;
-                currentLane = i;
-            }
-        }
+        currentLane = randomStartingLane ? Random.Range(0, laneCount) : laneCount / 2;
+        targetLanePosition = GetLanePosition(currentLane);
 
-        // Add a little randomness so they don't all swerve at the exact same time
-        timer = laneChangeInterval + Random.Range(0f, 1f);
+        Vector3 position = transform.position;
+        if (travelAlongX)
+            position.z = targetLanePosition;
+        else
+            position.x = targetLanePosition;
+
+        transform.position = position;
     }
 
-    void Update()
+    private void Update()
     {
-        Vector3 newPos = transform.position;
+        Vector3 position = transform.position;
 
-        // 1. Drive forward constantly
-        newPos.z += forwardSpeed * Time.deltaTime;
-
-        // 2. The AI Decision Engine
-        timer -= Time.deltaTime;
-        if (timer <= 0)
+        if (travelAlongX)
         {
-            timer = laneChangeInterval + Random.Range(0f, 1f); // Reset timer
-
-            // 50/50 chance to swerve left or right
-            if (Random.value > 0.5f)
-            {
-                if (currentLane < 3) currentLane++; // Swerve Right
-            }
-            else
-            {
-                if (currentLane > 0) currentLane--; // Swerve Left
-            }
+            position.x += forwardSpeed * Time.deltaTime;
+            position.z = Mathf.MoveTowards(
+                position.z,
+                targetLanePosition,
+                laneSnapSpeed * Time.deltaTime);
+        }
+        else
+        {
+            position.z += forwardSpeed * Time.deltaTime;
+            position.x = Mathf.MoveTowards(
+                position.x,
+                targetLanePosition,
+                laneSnapSpeed * Time.deltaTime);
         }
 
-        // 3. Execute the swerve
-        newPos.x = Mathf.Lerp(transform.position.x, lanes[currentLane], sideSnappiness * Time.deltaTime);
-        transform.position = newPos;
+        transform.position = position;
+    }
+
+    public void SetLane(int lane)
+    {
+        currentLane = Mathf.Clamp(lane, 0, laneCount - 1);
+        targetLanePosition = GetLanePosition(currentLane);
+    }
+
+    private float GetLanePosition(int lane)
+    {
+        return laneCenterOffset + (lane - (laneCount - 1) * 0.5f) * laneWidth;
     }
 }

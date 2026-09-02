@@ -241,7 +241,7 @@ GameObject:
   - component: {fileID: 5800202979443221620}
   - component: {fileID: 5179228958177703542}
   m_Layer: 0
-  m_Name: Scooter 1
+  m_Name: Scooter
   m_TagString: Player
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

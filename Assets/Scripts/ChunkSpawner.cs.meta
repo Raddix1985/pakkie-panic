@@ -1,2 +1,13 @@
 fileFormatVersion: 2
 guid: 9e0ffb2edab4ff44384fe6e22c62d949
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - potholePrefab: {fileID: 1704864192707728222, guid: ba51ab87cd6df2c4096b4b2c73183d24, type: 3}
+  - taxiPrefab: {fileID: 3162096615192148801, guid: b00d244077096c74a9db9d79a9585a66, type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
